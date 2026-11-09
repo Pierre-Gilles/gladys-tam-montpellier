@@ -60,10 +60,10 @@ test('departures widget: one compact row per route, soonest first, in every lang
   assert.deepEqual(
     fr.components[2].items.map((item) => [item.label, item.value]),
     [
-      ['1 → Occitanie', 'À l’approche · 15 · 30 · 45 min'],
-      ['1 → Gare Sud France', '7 · 20 · 35 · 50 min'],
-      ['2 → Jacou', '9 · 38 min · 23:53 · 00:23'],
-      ['3 → Juvignac', '15 · 45 min · 00:00 · 00:30'],
+      ['1 → Occitanie', 'À l’approche · 15 min'],
+      ['1 → Gare Sud France', '7 min · 20 min'],
+      ['2 → Jacou', '9 min · 38 min'],
+      ['3 → Juvignac', '15 min · 45 min'],
     ],
   );
 });
@@ -99,6 +99,22 @@ test('departures widget: times beyond an hour, nothing announced', () => {
   const options = { language: 'en', now: NOW, timeZone: TZ };
   const late = [passage({ time: '22:50' }), passage({ time: '24:10', realtime: false })];
   assert.equal(routeValue(late, options), '5 min · 00:10');
+  // A night passage of the same service day stays a plain time; the next
+  // service day says its day, and only the next passage is shown then.
+  assert.equal(routeValue([passage({ time: '24:30' })], options), '00:30');
+  const timetable = (time) => passage({ time, realtime: false });
+  const morning = buildDeparturesWidget({
+    title: 'Château',
+    passages: [timetable('28:50'), timetable('29:20')],
+    readAt: NOW,
+    count: 6,
+    language: 'fr',
+    now: NOW,
+    timeZone: TZ,
+  });
+  assertValid(morning, 'tomorrow');
+  assert.equal(morning.components[2].items[0].value, 'demain 04:50');
+  assert.equal(routeValue([timetable('53:10')], options), 'Thu 05:10');
   const empty = buildDeparturesWidget({
     title: 'Château',
     passages: [],

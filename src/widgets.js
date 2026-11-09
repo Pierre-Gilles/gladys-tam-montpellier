@@ -3,9 +3,10 @@
 //
 //   - `departures`  the next passages of a stop, like the screens of the
 //                   stops, compact: one row per line and destination, its
-//                   next passages on one line — 1 · 9 · 27 min, a cancelled
-//                   trip as "supprimé 21:44", the row in orange when the
-//                   next one is late or a trip is cancelled. A followed stop
+//                   next two passages — 1 min · 9 min, 52 min · 11:07,
+//                   demain 04:50, a cancelled trip as "supprimé 21:44" —
+//                   the row in orange when the next one is late or a trip
+//                   is cancelled. A followed stop
 //                   (chosen among the devices), several (the devices of one
 //                   stop merged, a row per stop otherwise), or any stop typed
 //                   in the widget settings (with an optional line);
@@ -39,6 +40,8 @@ const BOARD_COUNT = { min: 1, max: 8, default: 6 };
 // Characters a status row holds on one line in a dashboard column: beyond,
 // the core cuts the value. A route then drops its last passages.
 const ROW_CHARACTERS = 46;
+// Passages a row shows: the next one and the one after, like the screens.
+const SHOWN_PASSAGES = 2;
 const MAX_LIST_ITEMS = 8;
 const MAX_STATUS_ITEMS = 10;
 const STATE_COLORS = {
@@ -106,41 +109,39 @@ function routesOf(passages) {
 }
 
 /**
- * @description The times of one route, as on the screens of the stops, on one
- * line: "1 · 9 · 27 min", "À l'approche · 12 min".
- * @param {object[]} passages - The passages of the route.
+ * @description The passages a row shows, as on the screens of the stops: the
+ * next one that runs and the one after it (cancelled ones before it kept, so
+ * a cancellation is seen). The one after only when the next comes within the
+ * hour: "tomorrow 04:50 · tomorrow 05:10" would say twice the same.
+ * @param {object[]} passages - The passages of the route, soonest first.
+ * @param {number} now - Now (ms).
+ * @returns {object[]} The passages to show.
+ */
+function shownPassages(passages, now) {
+  const next = passages.findIndex((passage) => !passage.cancelled);
+  if (next === -1) {
+    return passages.slice(0, 1);
+  }
+  const soon = minutesLeft(passages[next], now) < 60;
+  return passages.slice(0, next + (soon ? SHOWN_PASSAGES : 1));
+}
+
+/**
+ * @description The times of one route, each with its unit, so that the row
+ * reads at a glance: "4 min · 19 min", "À l'approche · 12 min",
+ * "52 min · 11:07", "supprimé 21:44 · 6 min", "demain 04:50".
+ * @param {object[]} passages - The passages to show (shownPassages).
  * @param {object} options - `{ language, now, timeZone }`.
  * @returns {string} The value of the row.
  */
 function routeValue(passages, options) {
-  // A run of waits shares its unit: "10 · 33 min · 11:29".
-  const parts = [];
-  let run = [];
-  const flush = () => {
-    if (run.length) {
-      parts.push(`${run.join(' · ')} ${t('minutesShort', options.language)}`);
-      run = [];
-    }
-  };
-  for (const passage of passages) {
-    if (passage.cancelled) {
-      flush();
-      parts.push(
-        t('cancelledShort', options.language, {
+  const parts = passages.map((passage) =>
+    passage.cancelled
+      ? t('cancelledShort', options.language, {
           time: formatTime(passage.scheduled, options.timeZone),
-        }),
-      );
-      continue;
-    }
-    const minutes = minutesLeft(passage, options.now);
-    if (minutes > 0 && minutes < 60) {
-      run.push(String(minutes));
-      continue;
-    }
-    flush();
-    parts.push(passageShort(passage, options));
-  }
-  flush();
+        })
+      : passageShort(passage, options),
+  );
   return clip(parts.join(' · '), 40);
 }
 
@@ -167,7 +168,7 @@ function boardRows(upcoming, count, options) {
           route.some((passage) => passage.cancelled) ||
           (next.realtime && next.delay >= LATE_MINUTES);
         const label = clip(next.destination ? `${next.line} → ${next.destination}` : next.line, 40);
-        let shown = route;
+        let shown = shownPassages(route, options.now);
         let value = routeValue(shown, options);
         while (shown.length > 1 && label.length + value.length > ROW_CHARACTERS) {
           shown = shown.slice(0, -1);
