@@ -300,12 +300,6 @@ const TEXTS = {
     de: 'TaM · aktualisiert um {time}',
     es: 'TaM · actualizado a las {time}',
   },
-  minutesShort: {
-    en: 'min',
-    fr: 'min',
-    de: 'Min.',
-    es: 'min',
-  },
   moreInfo: {
     en: 'More information',
     fr: 'En savoir plus',
@@ -679,6 +673,7 @@ export {
   lineLabel,
   lineDeviceName,
   passageWhen,
+  clockText,
   passageShort,
   passageText,
 };

@@ -95,6 +95,62 @@ test('departures widget: a cancelled trip and a late one colour their row', () =
   );
 });
 
+test('departures widget: the two next trips, the cancellations of the hour, the colour of what is shown', () => {
+  const rows = (passages) =>
+    buildDeparturesWidget({
+      title: 'Comédie',
+      passages: passages.sort((a, b) => a.at - b.at),
+      readAt: NOW,
+      count: 6,
+      language: 'fr',
+      now: NOW,
+      timeZone: TZ,
+    }).components[2].items.map((item) => [item.label, item.value, item.color]);
+  // A cancellation after the two next trips is shown: it explains the orange.
+  assert.deepEqual(
+    rows([
+      passage({ time: '22:50' }),
+      passage({ time: '23:00' }),
+      passage({ time: '23:10', cancelled: true }),
+    ]),
+    [['1 → Mosson', '5 min · 15 min · supprimé 23:10', 'warning']],
+  );
+  // A cancellation between two trips does not hide the second one.
+  assert.deepEqual(
+    rows([
+      passage({ time: '22:50' }),
+      passage({ time: '23:00', cancelled: true }),
+      passage({ time: '23:10' }),
+    ]),
+    [['1 → Mosson', '5 min · supprimé 23:00 · 25 min', 'warning']],
+  );
+  // Beyond the hour, the same service day: still two trips.
+  assert.deepEqual(rows([passage({ time: '23:55' }), passage({ time: '24:05' })]), [
+    ['1 → Mosson', '23:55 · 00:05', 'success'],
+  ]);
+  // Too long for one line: the trip after the next goes first, then the
+  // latest cancellations; the next trip that runs always stays.
+  const far = (fields) => passage({ destination: 'Gare Sud France', ...fields });
+  assert.deepEqual(
+    rows([
+      far({ time: '22:47', cancelled: true }),
+      far({ time: '22:48', cancelled: true }),
+      far({ time: '22:51' }),
+      far({ time: '23:05' }),
+    ]),
+    [['1 → Gare Sud France', 'supprimé 22:47 · 6 min', 'warning']],
+  );
+  // A row cut down to its next trip is no longer orange for what it hides.
+  const longest = (fields) =>
+    passage({ destination: 'Saint-Jean-de-Védas Centre — Parc relais', ...fields });
+  assert.deepEqual(
+    rows([longest({ time: '22:48', cancelled: true }), longest({ time: '22:51' })]).map(
+      ([, value, color]) => [value, color],
+    ),
+    [['6 min', 'success']],
+  );
+});
+
 test('departures widget: times beyond an hour, nothing announced', () => {
   const options = { language: 'en', now: NOW, timeZone: TZ };
   const late = [passage({ time: '22:50' }), passage({ time: '24:10', realtime: false })];

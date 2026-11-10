@@ -3,13 +3,14 @@
 //
 //   - `departures`  the next passages of a stop, like the screens of the
 //                   stops, compact: one row per line and destination, its
-//                   next two passages — 1 min · 9 min, 52 min · 11:07,
-//                   demain 04:50, a cancelled trip as "supprimé 21:44" —
-//                   the row in orange when the next one is late or a trip
-//                   is cancelled. A followed stop
-//                   (chosen among the devices), several (the devices of one
-//                   stop merged, a row per stop otherwise), or any stop typed
-//                   in the widget settings (with an optional line);
+//                   next two passages, each with its unit — 1 min · 9 min,
+//                   52 min · 11:07, demain 04:50 —, and the trips cancelled
+//                   in the next hour ("supprimé 21:44"), the row in orange
+//                   when the next one is late or a cancelled trip is shown.
+//                   A followed stop (chosen among the devices), several (the
+//                   devices of one stop merged, a row per stop otherwise), or
+//                   any stop typed in the widget settings (with an optional
+//                   line);
 //   - `traffic`     the state of lines — normal, information, disrupted,
 //                   heavily disrupted — then their messages under way and
 //                   coming; a tap opens the full text. The followed lines,
@@ -19,10 +20,10 @@
 // -----------------------------------------------------------------------------
 
 import { WIDGET_COLORS } from '@gladysassistant/integration-sdk';
-import { t, lineStateText, passageShort, lineLabel } from './i18n.js';
-import { minutesLeft, routeOf, upcomingPassages, cancelledPassages } from './departures.js';
+import { t, lineStateText, passageShort, clockText, lineLabel } from './i18n.js';
+import { routeOf, upcomingPassages, cancelledPassages } from './departures.js';
 import { rank } from './traffic.js';
-import { formatTime, localClock } from './time.js';
+import { formatTime, localClock, serviceDay } from './time.js';
 
 const WIDGETS = {
   DEPARTURES: 'departures',
@@ -110,26 +111,26 @@ function routesOf(passages) {
 
 /**
  * @description The passages a row shows, as on the screens of the stops: the
- * next one that runs and the one after it (cancelled ones before it kept, so
- * a cancellation is seen). The one after only when the next comes within the
- * hour: "tomorrow 04:50 · tomorrow 05:10" would say twice the same.
+ * next two trips that run, and the trips cancelled in the next hour (the only
+ * cancelled ones the routes carry), in time order. One trip that runs only
+ * when the next belongs to a later service day: "demain 04:50 · demain 05:10"
+ * would say the day twice.
  * @param {object[]} passages - The passages of the route, soonest first.
- * @param {number} now - Now (ms).
+ * @param {object} options - `{ now, timeZone }`.
  * @returns {object[]} The passages to show.
  */
-function shownPassages(passages, now) {
-  const next = passages.findIndex((passage) => !passage.cancelled);
-  if (next === -1) {
-    return passages.slice(0, 1);
-  }
-  const soon = minutesLeft(passages[next], now) < 60;
-  return passages.slice(0, next + (soon ? SHOWN_PASSAGES : 1));
+function shownPassages(passages, { now, timeZone }) {
+  const running = passages.filter((passage) => !passage.cancelled);
+  const laterDay =
+    running.length > 0 && serviceDay(running[0].at, timeZone) !== serviceDay(now, timeZone);
+  const kept = new Set(running.slice(0, laterDay ? 1 : SHOWN_PASSAGES));
+  return passages.filter((passage) => passage.cancelled || kept.has(passage));
 }
 
 /**
  * @description The times of one route, each with its unit, so that the row
  * reads at a glance: "4 min · 19 min", "À l'approche · 12 min",
- * "52 min · 11:07", "supprimé 21:44 · 6 min", "demain 04:50".
+ * "52 min · 11:07", "6 min · supprimé 22:58 · 21 min", "demain 04:50".
  * @param {object[]} passages - The passages to show (shownPassages).
  * @param {object} options - `{ language, now, timeZone }`.
  * @returns {string} The value of the row.
@@ -137,17 +138,42 @@ function shownPassages(passages, now) {
 function routeValue(passages, options) {
   const parts = passages.map((passage) =>
     passage.cancelled
-      ? t('cancelledShort', options.language, {
-          time: formatTime(passage.scheduled, options.timeZone),
-        })
+      ? t('cancelledShort', options.language, { time: clockText(passage.scheduled, options) })
       : passageShort(passage, options),
   );
   return clip(parts.join(' · '), 40);
 }
 
 /**
+ * @description Cut the passages of a row to one line: the trip after the next
+ * goes first, then the cancellations, latest first. The next trip that runs
+ * always stays.
+ * @param {object[]} shown - The passages to show (shownPassages).
+ * @param {string} label - The label of the row.
+ * @param {object} options - `{ language, now, timeZone }`.
+ * @returns {{ shown: object[], value: string }} What fits, and its value.
+ */
+function fitRow(shown, label, options) {
+  const next = shown.find((passage) => !passage.cancelled);
+  let value = routeValue(shown, options);
+  while (label.length + value.length > ROW_CHARACTERS) {
+    const drop =
+      shown.findLast((passage) => !passage.cancelled && passage !== next) ??
+      shown.findLast((passage) => passage.cancelled);
+    if (!drop) {
+      break;
+    }
+    shown = shown.filter((passage) => passage !== drop);
+    value = routeValue(shown, options);
+  }
+  return { shown, value };
+}
+
+/**
  * @description The rows of one stop: one compact row per line and
- * destination, soonest first, each row cut to one line.
+ * destination, soonest first, each row cut to one line. A row is orange when
+ * its next trip is late or when it shows a cancelled trip: never for a
+ * cancellation it does not show.
  * @param {object[]} upcoming - The passages to come, cancelled ones of the
  * next hour included (soonest first).
  * @param {number} count - How many routes (rows).
@@ -164,16 +190,11 @@ function boardRows(upcoming, count, options) {
       .slice(0, count)
       .map((route) => {
         const next = nextOf(route);
-        const troubled =
-          route.some((passage) => passage.cancelled) ||
-          (next.realtime && next.delay >= LATE_MINUTES);
         const label = clip(next.destination ? `${next.line} → ${next.destination}` : next.line, 40);
-        let shown = shownPassages(route, options.now);
-        let value = routeValue(shown, options);
-        while (shown.length > 1 && label.length + value.length > ROW_CHARACTERS) {
-          shown = shown.slice(0, -1);
-          value = routeValue(shown, options);
-        }
+        const { shown, value } = fitRow(shownPassages(route, options), label, options);
+        const troubled =
+          shown.some((passage) => passage.cancelled) ||
+          (next.realtime && next.delay >= LATE_MINUTES);
         return { label, value, color: troubled ? WIDGET_COLORS.WARNING : WIDGET_COLORS.SUCCESS };
       })
   );
@@ -425,6 +446,7 @@ export {
   messageContent,
   readCount,
   routeValue,
+  shownPassages,
   shortDate,
   dateText,
   periodText,
